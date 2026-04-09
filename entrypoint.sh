@@ -7,7 +7,6 @@ set -e
 
 API_BASE="https://api.cloudflare.com/client/v4"
 CONFIG_FILE="${CONFIG_FILE:-/config/tunnel-config.json}"
-ACCESS_CREDENTIALS_FILE="${ACCESS_CREDENTIALS_FILE:-/shared/access-credentials.json}"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -186,97 +185,53 @@ for hostname in $hostnames; do
 done
 
 # ---------------------------------------------------------------------------
-# 4. Cloudflare Access auth (optional)
+# 4. API key auth via WAF custom rule (optional)
 # ---------------------------------------------------------------------------
-if [ "${ACCESS_ENABLED}" = "true" ]; then
-  echo "Setting up Cloudflare Access..."
+if [ -n "${API_KEY}" ]; then
+  echo "Setting up API key auth (WAF custom rule)..."
 
-  ACCESS_TOKEN_NAME="${ACCESS_TOKEN_NAME:-${TUNNEL_NAME}-service-token}"
-  ACCESS_APP_NAME="${ACCESS_APP_NAME:-${TUNNEL_NAME}-access}"
-  ACCESS_POLICY_NAME="${ACCESS_POLICY_NAME:-${TUNNEL_NAME}-service-auth}"
+  WAF_RULE_NAME="${TUNNEL_NAME}-api-key-auth"
 
-  # --- Service Token ---
-  if [ -f "$ACCESS_CREDENTIALS_FILE" ]; then
-    echo "  Found existing credentials file: $ACCESS_CREDENTIALS_FILE"
-    SERVICE_TOKEN_ID=$(jq -r '.service_token_id' "$ACCESS_CREDENTIALS_FILE")
-    echo "  Using existing service token: ${SERVICE_TOKEN_ID}"
-  else
-    existing_tokens=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/service_tokens")
-    existing_token_id=$(echo "$existing_tokens" | jq -r --arg name "$ACCESS_TOKEN_NAME" '.result[] | select(.name == $name) | .id' | head -1)
-
-    if [ -n "$existing_token_id" ]; then
-      echo "  Found existing service token '${ACCESS_TOKEN_NAME}' but no saved credentials. Rotating..."
-      rotate_resp=$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/service_tokens/${existing_token_id}/rotate")
-
-      SERVICE_TOKEN_ID=$(echo "$rotate_resp" | jq -r '.result.id')
-      CLIENT_ID=$(echo "$rotate_resp" | jq -r '.result.client_id')
-      CLIENT_SECRET=$(echo "$rotate_resp" | jq -r '.result.client_secret')
-    else
-      echo "  Creating service token '${ACCESS_TOKEN_NAME}'..."
-      token_resp=$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/service_tokens" \
-        -d "{\"name\":\"${ACCESS_TOKEN_NAME}\",\"duration\":\"8760h\"}")
-
-      SERVICE_TOKEN_ID=$(echo "$token_resp" | jq -r '.result.id')
-      CLIENT_ID=$(echo "$token_resp" | jq -r '.result.client_id')
-      CLIENT_SECRET=$(echo "$token_resp" | jq -r '.result.client_secret')
-    fi
-
-    # Save credentials immediately — secret is never returned again
-    mkdir -p "$(dirname "$ACCESS_CREDENTIALS_FILE")"
-    jq -n \
-      --arg sid "$SERVICE_TOKEN_ID" \
-      --arg cid "$CLIENT_ID" \
-      --arg csec "$CLIENT_SECRET" \
-      '{"service_token_id": $sid, "client_id": $cid, "client_secret": $csec}' \
-      > "$ACCESS_CREDENTIALS_FILE"
-    chmod 600 "$ACCESS_CREDENTIALS_FILE"
-    echo "  Credentials saved to $ACCESS_CREDENTIALS_FILE"
-  fi
-
-  # --- Access Policy ---
-  echo "  Configuring Access policy..."
-
-  existing_policies=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/policies")
-  POLICY_ID=$(echo "$existing_policies" | jq -r --arg name "$ACCESS_POLICY_NAME" '.result[] | select(.name == $name) | .id' | head -1)
-
-  if [ -n "$POLICY_ID" ]; then
-    echo "  Found existing policy: ${POLICY_ID}"
-    cf_api PUT "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/policies/${POLICY_ID}" \
-      -d "{\"name\":\"${ACCESS_POLICY_NAME}\",\"decision\":\"non_identity\",\"include\":[{\"service_token\":{\"token_id\":\"${SERVICE_TOKEN_ID}\"}}]}" \
-      > /dev/null
-  else
-    echo "  Creating Access policy '${ACCESS_POLICY_NAME}'..."
-    policy_resp=$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/policies" \
-      -d "{\"name\":\"${ACCESS_POLICY_NAME}\",\"decision\":\"non_identity\",\"include\":[{\"service_token\":{\"token_id\":\"${SERVICE_TOKEN_ID}\"}}]}")
-
-    POLICY_ID=$(echo "$policy_resp" | jq -r '.result.id')
-    echo "  Created policy: ${POLICY_ID}"
-  fi
-
-  # --- Access Applications (one per hostname) ---
-  existing_apps=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps")
-
+  # Build expression: block requests to any ingress hostname without the correct Bearer token
+  # (host eq "a" or host eq "b") and not (header eq "Bearer <key>")
+  host_conditions=""
   for hostname in $hostnames; do
-    app_name="${ACCESS_APP_NAME}-${hostname}"
-
-    APP_ID=$(echo "$existing_apps" | jq -r --arg domain "$hostname" '.result[] | select(.domain == $domain) | .id' | head -1)
-
-    if [ -n "$APP_ID" ]; then
-      echo "  Access app for ${hostname} already exists: ${APP_ID}"
-      cf_api PUT "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps/${APP_ID}" \
-        -d "{\"name\":\"${app_name}\",\"type\":\"self_hosted\",\"domain\":\"${hostname}\",\"session_duration\":\"24h\",\"policies\":[{\"id\":\"${POLICY_ID}\",\"precedence\":1}]}" \
-        > /dev/null
-    else
-      echo "  Creating Access app for ${hostname}..."
-      app_resp=$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps" \
-        -d "{\"name\":\"${app_name}\",\"type\":\"self_hosted\",\"domain\":\"${hostname}\",\"session_duration\":\"24h\",\"policies\":[{\"id\":\"${POLICY_ID}\",\"precedence\":1}]}")
-
-      APP_ID=$(echo "$app_resp" | jq -r '.result.id')
-      echo "  Created Access app: ${APP_ID}"
+    if [ -n "$host_conditions" ]; then
+      host_conditions="${host_conditions} or "
     fi
+    host_conditions="${host_conditions}http.host eq \"${hostname}\""
   done
 
-  echo "Cloudflare Access configured."
+  expression="(${host_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\")"
+
+  # Check if a custom firewall ruleset already exists
+  existing_rulesets=$(cf_api GET "/zones/${CLOUDFLARE_ZONE_ID}/rulesets")
+  RULESET_ID=$(echo "$existing_rulesets" | jq -r '.result[] | select(.phase == "http_request_firewall_custom") | .id' | head -1)
+
+  if [ -n "$RULESET_ID" ]; then
+    # Ruleset exists — check if our rule is already in it
+    ruleset=$(cf_api GET "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${RULESET_ID}")
+    RULE_ID=$(echo "$ruleset" | jq -r --arg desc "$WAF_RULE_NAME" '.result.rules[] | select(.description == $desc) | .id' | head -1)
+
+    if [ -n "$RULE_ID" ]; then
+      echo "  Updating existing WAF rule..."
+      cf_api PATCH "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}" \
+        -d "{\"expression\":\"${expression}\",\"action\":\"block\",\"description\":\"${WAF_RULE_NAME}\"}" \
+        > /dev/null
+    else
+      echo "  Adding WAF rule to existing ruleset..."
+      cf_api POST "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${RULESET_ID}/rules" \
+        -d "{\"expression\":\"${expression}\",\"action\":\"block\",\"description\":\"${WAF_RULE_NAME}\"}" \
+        > /dev/null
+    fi
+  else
+    echo "  Creating WAF ruleset with API key rule..."
+    cf_api POST "/zones/${CLOUDFLARE_ZONE_ID}/rulesets" \
+      -d "{\"name\":\"API Key Auth\",\"kind\":\"zone\",\"phase\":\"http_request_firewall_custom\",\"rules\":[{\"expression\":\"${expression}\",\"action\":\"block\",\"description\":\"${WAF_RULE_NAME}\"}]}" \
+      > /dev/null
+  fi
+
+  echo "  API key auth configured for: $hostnames"
 fi
 
 # ---------------------------------------------------------------------------

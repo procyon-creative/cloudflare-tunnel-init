@@ -201,7 +201,7 @@ if [ -n "${API_KEY}" ]; then
     host_conditions="${host_conditions}http.host eq \"${hostname}\""
   done
 
-  expression="(${host_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\")"
+  expression="(${host_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\") and not (http.request.method eq \"OPTIONS\")"
 
   # Build rule JSON with jq to avoid escaping issues
   rule_json=$(jq -n --arg expr "$expression" --arg desc "$WAF_RULE_NAME" \

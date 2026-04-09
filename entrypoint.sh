@@ -193,7 +193,6 @@ if [ -n "${API_KEY}" ]; then
   WAF_RULE_NAME="${TUNNEL_NAME}-api-key-auth"
 
   # Build expression: block requests to any ingress hostname without the correct Bearer token
-  # (host eq "a" or host eq "b") and not (header eq "Bearer <key>")
   host_conditions=""
   for hostname in $hostnames; do
     if [ -n "$host_conditions" ]; then
@@ -204,31 +203,33 @@ if [ -n "${API_KEY}" ]; then
 
   expression="(${host_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\")"
 
+  # Build rule JSON with jq to avoid escaping issues
+  rule_json=$(jq -n --arg expr "$expression" --arg desc "$WAF_RULE_NAME" \
+    '{expression: $expr, action: "block", description: $desc}')
+
   # Check if a custom firewall ruleset already exists
   existing_rulesets=$(cf_api GET "/zones/${CLOUDFLARE_ZONE_ID}/rulesets")
   RULESET_ID=$(echo "$existing_rulesets" | jq -r '.result[] | select(.phase == "http_request_firewall_custom") | .id' | head -1)
 
   if [ -n "$RULESET_ID" ]; then
-    # Ruleset exists — check if our rule is already in it
     ruleset=$(cf_api GET "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${RULESET_ID}")
     RULE_ID=$(echo "$ruleset" | jq -r --arg desc "$WAF_RULE_NAME" '.result.rules[] | select(.description == $desc) | .id' | head -1)
 
     if [ -n "$RULE_ID" ]; then
       echo "  Updating existing WAF rule..."
       cf_api PATCH "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}" \
-        -d "{\"expression\":\"${expression}\",\"action\":\"block\",\"description\":\"${WAF_RULE_NAME}\"}" \
-        > /dev/null
+        -d "$rule_json" > /dev/null
     else
       echo "  Adding WAF rule to existing ruleset..."
       cf_api POST "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${RULESET_ID}/rules" \
-        -d "{\"expression\":\"${expression}\",\"action\":\"block\",\"description\":\"${WAF_RULE_NAME}\"}" \
-        > /dev/null
+        -d "$rule_json" > /dev/null
     fi
   else
     echo "  Creating WAF ruleset with API key rule..."
+    ruleset_json=$(jq -n --argjson rule "$rule_json" \
+      '{name: "API Key Auth", kind: "zone", phase: "http_request_firewall_custom", rules: [$rule]}')
     cf_api POST "/zones/${CLOUDFLARE_ZONE_ID}/rulesets" \
-      -d "{\"name\":\"API Key Auth\",\"kind\":\"zone\",\"phase\":\"http_request_firewall_custom\",\"rules\":[{\"expression\":\"${expression}\",\"action\":\"block\",\"description\":\"${WAF_RULE_NAME}\"}]}" \
-      > /dev/null
+      -d "$ruleset_json" > /dev/null
   fi
 
   echo "  API key auth configured for: $hostnames"

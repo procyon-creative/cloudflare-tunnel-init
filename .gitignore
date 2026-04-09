@@ -1,3 +1,6 @@
 .env
 tunnel-token
 tunnel-config.json
+.DS_Store
+.vscode/
+.idea/

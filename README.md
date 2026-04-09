@@ -138,26 +138,14 @@ See the [Cloudflare origin configuration docs](https://developers.cloudflare.com
 
 `connectTimeout`, `tlsTimeout`, `tcpKeepAlive`, `noHappyEyeballs`, `keepAliveConnections`, `keepAliveTimeout`, `httpHostHeader`, `originServerName`, `matchSNItoHost`, `caPool`, `noTLSVerify`, `disableChunkedEncoding`, `bastionMode`, `proxyAddress`, `proxyPort`, `proxyType`, `ipRules`, `http2Origin`, `access`
 
-## Cloudflare Access auth (optional)
+## API key auth (optional)
 
-Set `ACCESS_ENABLED=true` to protect your tunnel with Cloudflare Access service token auth. The container will automatically:
+Set `API_KEY` in your `.env` to protect your tunnel with a standard Bearer token. The container creates a Cloudflare WAF custom rule that blocks any request without the correct `Authorization: Bearer <key>` header — all auth happens at the Cloudflare edge, before traffic reaches your origin.
 
-1. Create a service token and save credentials to `/shared/access-credentials.json`
-2. Create an Access policy requiring that token
-3. Create a self-hosted Access application for each hostname
+This works with any OpenAI-compatible client (Continue, Brave, LiteLLM, etc.) — just set the URL and API key.
 
-Clients authenticate by sending two headers:
-
-```
-CF-Access-Client-Id: <from credentials file>
-CF-Access-Client-Secret: <from credentials file>
-```
-
-The credentials file is persisted on the `tunnel-data` volume. On restart, the container reuses the existing token. If the credentials file is lost (e.g. volume deleted), the container rotates the existing token to get a new secret.
-
-To use Access auth, your API token needs two additional permissions:
-- Account: Access: Apps and Policies (Edit)
-- Account: Access: Service Tokens (Edit)
+To use API key auth, your API token needs one additional permission:
+- Zone: Firewall Services (Write)
 
 ## Environment variables
 
@@ -168,8 +156,7 @@ To use Access auth, your API token needs two additional permissions:
 | `CLOUDFLARE_ZONE_ID`   | Yes      |                               | Zone ID for DNS record creation |
 | `TUNNEL_NAME`          | Yes      |                               | Name for the tunnel (created if it doesn't exist) |
 | `CONFIG_FILE`          | No       | `/config/tunnel-config.json`  | Path to ingress config inside the container |
-| `ACCESS_ENABLED`       | No       |                               | Set to `true` to enable Cloudflare Access auth |
-| `ACCESS_CREDENTIALS_FILE` | No    | `/shared/access-credentials.json` | Path to persist service token credentials |
+| `API_KEY`              | No       |                               | Bearer token for API key auth via WAF rule |
 
 ## Idempotency
 
@@ -178,7 +165,7 @@ Everything is safe to restart:
 - **Tunnel**: Finds existing tunnel by name before creating a new one
 - **DNS records**: Checks existing records, updates if the target changed, skips if already correct
 - **Ingress config**: PUT replaces the full config each time
-- **Access**: Reuses credentials file, finds existing policy/apps by name
+- **WAF rule**: Updates existing rule if found, creates if not
 
 ## License
 

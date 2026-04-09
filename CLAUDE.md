@@ -40,12 +40,11 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 - [x] API token permissions documented
 - [x] .gitignore
 
-### Phase 4: Cloudflare Access auth — Done
-- [x] If `ACCESS_ENABLED=true`, create a Cloudflare Access self-hosted application for each hostname
-- [x] Create a service token via API, persist client_id and client_secret to `/shared/access-credentials.json`
-- [x] Create a non_identity policy requiring the service token
-- [x] Attach policy to the Access application
-- [x] Idempotent: checks credentials file first, finds existing app/token/policy by name, rotates token if credentials file lost
+### Phase 4: API key auth via WAF — Done
+- [x] If `API_KEY` is set, create a WAF custom rule blocking requests without `Authorization: Bearer <key>`
+- [x] Standard OpenAI API key format — works with any client (Continue, Brave, LiteLLM, etc.)
+- [x] Auth enforced at Cloudflare edge — no unauthenticated traffic reaches origin
+- [x] Idempotent: finds existing ruleset/rule by name, updates if present
 - [x] All via API — no dashboard interaction, no manual steps
 
 ### Design decisions made
@@ -67,11 +66,12 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 - List DNS: `GET /zones/{zone_id}/dns_records?type=CNAME&name={hostname}`
 - Update DNS: `PUT /zones/{zone_id}/dns_records/{record_id}`
 
-### Cloudflare Access (for future auth feature)
-- Create service token: `POST /accounts/{account_id}/access/service_tokens` with `{"name": "...", "duration": "8760h"}` — **client_secret is only returned once**, must be persisted to file immediately
-- Create reusable policy: `POST /accounts/{account_id}/access/policies` with `{"name": "...", "decision": "non_identity", "include": [{"service_token": {"token_id": "..."}}]}`
-- Create self-hosted app: `POST /accounts/{account_id}/access/apps` with `{"name": "...", "type": "self_hosted", "domain": "...", "policies": [{"id": "...", "precedence": 1}]}`
-- Client auth headers: `CF-Access-Client-Id` and `CF-Access-Client-Secret`
+### WAF Custom Rules (API key auth)
+- List zone rulesets: `GET /zones/{zone_id}/rulesets`
+- Create ruleset: `POST /zones/{zone_id}/rulesets` with phase `http_request_firewall_custom`
+- Add rule to ruleset: `POST /zones/{zone_id}/rulesets/{ruleset_id}/rules`
+- Update rule: `PATCH /zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}`
+- Expression format: `(http.host eq "...") and not (http.request.headers["authorization"][0] eq "Bearer <key>")`
 
 ### Runtime
 - Run tunnel: `exec cloudflared tunnel --no-autoupdate run --token {TUNNEL_TOKEN}` (entrypoint exec's into this)
@@ -80,5 +80,4 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 
 - Account: Cloudflare Tunnel (Edit)
 - Zone: DNS (Edit)
-- Account: Access: Apps and Policies (Edit) — only if using Access auth
-- Account: Access: Service Tokens (Edit) — only if using Access auth
+- Zone: Firewall Services (Write) — only if using API_KEY

@@ -1,0 +1,11 @@
+services:
+  cloudflared:
+    image: ghcr.io/procyon-creative/cloudflare-tunnel-init:latest
+    env_file: .env
+    volumes:
+      - ./tunnel-config.json:/config/tunnel-config.json:ro
+      - tunnel-data:/shared
+    restart: unless-stopped
+
+volumes:
+  tunnel-data:

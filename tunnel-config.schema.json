@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/procyon-creative/cloudflare-tunnel-init/tunnel-config.schema.json",
+  "title": "Cloudflare Tunnel Ingress Configuration",
+  "description": "Defines hostname-to-service mappings for a Cloudflare Tunnel. Derived from the cloudflare/cloudflared Go structs (config/configuration.go, ingress/config.go). See: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/origin-configuration/",
+  "type": "object",
+  "required": ["ingress"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "ingress": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered list of ingress rules. The last rule must be a catch-all with no hostname.",
+      "items": {
+        "type": "object",
+        "required": ["service"],
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "type": "string",
+            "description": "Public hostname for this rule (e.g. app.example.com). Omit only for the catch-all rule."
+          },
+          "path": {
+            "type": "string",
+            "description": "Optional path filter using glob syntax (e.g. /api/*)."
+          },
+          "service": {
+            "type": "string",
+            "description": "Origin service URL (e.g. http://app:8080) or built-in like http_status:404."
+          },
+          "originRequest": {
+            "$ref": "#/$defs/originRequest"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "originRequest": {
+      "type": "object",
+      "description": "Per-rule origin request settings. Matches cloudflared OriginRequestConfig struct.",
+      "additionalProperties": false,
+      "properties": {
+        "connectTimeout": {
+          "type": "string",
+          "description": "Timeout for establishing a new TCP connection to the origin (e.g. 30s, 1m)."
+        },
+        "tlsTimeout": {
+          "type": "string",
+          "description": "Timeout for completing a TLS handshake to the origin."
+        },
+        "tcpKeepAlive": {
+          "type": "string",
+          "description": "Keep-alive period for TCP connections to the origin."
+        },
+        "noHappyEyeballs": {
+          "type": "boolean",
+          "description": "Disable the Happy Eyeballs algorithm for origin connections."
+        },
+        "keepAliveConnections": {
+          "type": "integer",
+          "description": "Maximum number of idle keep-alive connections to the origin."
+        },
+        "keepAliveTimeout": {
+          "type": "string",
+          "description": "Timeout after which idle keep-alive connections are closed."
+        },
+        "httpHostHeader": {
+          "type": "string",
+          "description": "Override the HTTP Host header sent to the origin."
+        },
+        "originServerName": {
+          "type": "string",
+          "description": "SNI hostname used for TLS verification with the origin."
+        },
+        "matchSNItoHost": {
+          "type": "boolean",
+          "description": "Automatically set the SNI to match the hostname in the ingress rule."
+        },
+        "caPool": {
+          "type": "string",
+          "description": "Path to a CA certificate pool for verifying the origin's TLS certificate."
+        },
+        "noTLSVerify": {
+          "type": "boolean",
+          "description": "Disable TLS certificate verification to the origin."
+        },
+        "disableChunkedEncoding": {
+          "type": "boolean",
+          "description": "Disable chunked transfer encoding to the origin."
+        },
+        "bastionMode": {
+          "type": "boolean",
+          "description": "Enable bastion mode for SSH/RDP proxying."
+        },
+        "proxyAddress": {
+          "type": "string",
+          "description": "Address for reaching the origin (default 127.0.0.1)."
+        },
+        "proxyPort": {
+          "type": "integer",
+          "description": "Port for reaching the origin."
+        },
+        "proxyType": {
+          "type": "string",
+          "description": "Proxy protocol type (empty string or 'socks')."
+        },
+        "ipRules": {
+          "type": "array",
+          "description": "IP access rules for the origin.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "prefix": {
+                "type": "string",
+                "description": "IP CIDR prefix to match."
+              },
+              "ports": {
+                "type": "array",
+                "items": { "type": "integer" },
+                "description": "Ports to match."
+              },
+              "allow": {
+                "type": "boolean",
+                "description": "Whether to allow or deny matching traffic."
+              }
+            }
+          }
+        },
+        "http2Origin": {
+          "type": "boolean",
+          "description": "Enable HTTP/2 connections to the origin server."
+        },
+        "access": {
+          "type": "object",
+          "description": "Cloudflare Access configuration for authenticating requests to this origin.",
+          "additionalProperties": false,
+          "properties": {
+            "required": {
+              "type": "boolean",
+              "description": "When true, fail requests that don't arrive through an Access-authenticated endpoint."
+            },
+            "teamName": {
+              "type": "string",
+              "description": "Cloudflare Access organization team name."
+            },
+            "audTag": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Audience tags to verify Access JWT against."
+            },
+            "environment": {
+              "type": "string",
+              "description": "Access environment."
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "./tunnel-config.schema.json",
+  "ingress": [
+    {
+      "hostname": "app.example.com",
+      "service": "http://app:8080"
+    },
+    {
+      "hostname": "api.example.com",
+      "path": "/v1/*",
+      "service": "http://api:3000",
+      "originRequest": {
+        "connectTimeout": "60s"
+      }
+    },
+    {
+      "service": "http_status:404"
+    }
+  ]
+}

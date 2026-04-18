@@ -97,9 +97,31 @@ validate_config() {
 
     has_auth=$(echo "$rule" | jq 'has("auth")')
     if [ "$has_auth" = "true" ]; then
-      unknown_auth_keys=$(echo "$rule" | jq -r '.auth | keys[] | select(. != "apiKey")')
+      unknown_auth_keys=$(echo "$rule" | jq -r '.auth | keys[] | select(. != "apiKey" and . != "access")')
       if [ -n "$unknown_auth_keys" ]; then
         die "Ingress rule $i has unknown auth keys: $unknown_auth_keys"
+      fi
+
+      has_apikey=$(echo "$rule" | jq '.auth.apiKey == true')
+      has_access=$(echo "$rule" | jq '.auth | has("access")')
+      if [ "$has_apikey" = "true" ] && [ "$has_access" = "true" ]; then
+        die "Ingress rule $i sets both auth.apiKey and auth.access — use separate hostnames for each auth method"
+      fi
+
+      if [ "$has_access" = "true" ]; then
+        unknown_access_keys=$(echo "$rule" | jq -r '.auth.access | keys[] | select(. != "name" and . != "emailDomain" and . != "emails" and . != "sessionDuration")')
+        if [ -n "$unknown_access_keys" ]; then
+          die "Ingress rule $i has unknown auth.access keys: $unknown_access_keys"
+        fi
+
+        has_domain=$(echo "$rule" | jq '.auth.access | has("emailDomain")')
+        has_emails=$(echo "$rule" | jq '.auth.access | has("emails")')
+        if [ "$has_domain" = "true" ] && [ "$has_emails" = "true" ]; then
+          die "Ingress rule $i has both auth.access.emailDomain and auth.access.emails — pick one"
+        fi
+        if [ "$has_domain" = "false" ] && [ "$has_emails" = "false" ]; then
+          die "Ingress rule $i auth.access needs exactly one of emailDomain or emails"
+        fi
       fi
     fi
 
@@ -269,7 +291,85 @@ if [ -z "$apikey_hostnames" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Get tunnel token and run cloudflared
+# 5. Cloudflare Access apps (optional, per-hostname)
+# ---------------------------------------------------------------------------
+access_rule_count=$(echo "$ingress_rules" | jq '[.[] | select(.auth.access)] | length')
+
+if [ "$access_rule_count" -gt 0 ]; then
+  echo "Setting up Cloudflare Access apps..."
+
+  i=0
+  rule_count=$(echo "$ingress_rules" | jq 'length')
+  while [ "$i" -lt "$rule_count" ]; do
+    rule=$(echo "$ingress_rules" | jq ".[$i]")
+    has_access=$(echo "$rule" | jq '.auth.access // empty | length > 0')
+    if [ "$has_access" != "true" ]; then
+      i=$((i + 1)); continue
+    fi
+
+    hostname=$(echo "$rule" | jq -r '.hostname')
+    access_name=$(echo "$rule" | jq -r --arg default "${TUNNEL_NAME}-${hostname}" '.auth.access.name // $default')
+    session_duration=$(echo "$rule" | jq -r '.auth.access.sessionDuration // "24h"')
+
+    # Build the policy include[] from emailDomain or emails
+    email_domain=$(echo "$rule" | jq -r '.auth.access.emailDomain // empty')
+    if [ -n "$email_domain" ]; then
+      include_json=$(jq -n --arg d "$email_domain" '[{email_domain: {domain: $d}}]')
+    else
+      include_json=$(echo "$rule" | jq '[.auth.access.emails[] | {email: {email: .}}]')
+    fi
+
+    # Find existing app for this domain
+    existing_apps=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?domain=${hostname}")
+    app_id=$(echo "$existing_apps" | jq -r --arg domain "$hostname" '.result[]? | select(.domain == $domain) | .id' | head -1)
+
+    app_payload=$(jq -n \
+      --arg name "$access_name" \
+      --arg domain "$hostname" \
+      --arg session "$session_duration" \
+      '{name: $name, domain: $domain, type: "self_hosted", session_duration: $session}')
+
+    if [ -n "$app_id" ]; then
+      echo "  Updating Access app for ${hostname}..."
+      cf_api PUT "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps/${app_id}" \
+        -d "$app_payload" > /dev/null
+    else
+      echo "  Creating Access app for ${hostname}..."
+      create_resp=$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps" \
+        -d "$app_payload")
+      app_id=$(echo "$create_resp" | jq -r '.result.id')
+    fi
+
+    # Find existing Allow policy on the app
+    existing_policies=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps/${app_id}/policies")
+    policy_id=$(echo "$existing_policies" | jq -r --arg name "${access_name}-allow" '.result[]? | select(.name == $name) | .id' | head -1)
+
+    policy_payload=$(jq -n \
+      --arg name "${access_name}-allow" \
+      --argjson include "$include_json" \
+      '{name: $name, decision: "allow", include: $include, precedence: 1}')
+
+    if [ -n "$policy_id" ]; then
+      cf_api PUT "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps/${app_id}/policies/${policy_id}" \
+        -d "$policy_payload" > /dev/null
+    else
+      cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps/${app_id}/policies" \
+        -d "$policy_payload" > /dev/null
+    fi
+
+    if [ -n "$email_domain" ]; then
+      echo "    Allowing email domain: ${email_domain}"
+    else
+      emails=$(echo "$rule" | jq -r '.auth.access.emails | join(", ")')
+      echo "    Allowing emails: ${emails}"
+    fi
+
+    i=$((i + 1))
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Get tunnel token and run cloudflared
 # ---------------------------------------------------------------------------
 echo "Fetching tunnel token..."
 

@@ -104,6 +104,7 @@ Each rule maps a hostname to an origin service:
 | `service`       | Yes      | Origin URL (e.g. `http://app:8080`) or built-in like `http_status:404`. |
 | `path`          | No       | Path filter with glob syntax (e.g. `/api/*`). |
 | `originRequest` | No       | Per-rule origin settings (timeouts, TLS, etc). |
+| `auth`          | No       | Per-rule authentication. See [API key auth](#api-key-auth-optional). |
 
 The last rule **must** be a catch-all with no `hostname` — this handles unmatched requests.
 
@@ -121,6 +122,7 @@ The last rule **must** be a catch-all with no `hostname` — this handles unmatc
       "hostname": "api.example.com",
       "path": "/v1/*",
       "service": "http://api:3000",
+      "auth": { "apiKey": true },
       "originRequest": {
         "connectTimeout": "60s"
       }
@@ -140,12 +142,36 @@ See the [Cloudflare origin configuration docs](https://developers.cloudflare.com
 
 ## API key auth (optional)
 
-Set `API_KEY` in your `.env` to protect your tunnel with a standard Bearer token. The container creates a Cloudflare WAF custom rule that blocks any request without the correct `Authorization: Bearer <key>` header — all auth happens at the Cloudflare edge, before traffic reaches your origin.
+Protect specific hostnames with a Bearer token. Two things are required:
 
-This works with any OpenAI-compatible client (Continue, Brave, LiteLLM, etc.) — just set the URL and API key.
+1. Set `API_KEY` in your `.env`
+2. Opt each hostname in with `auth.apiKey: true` in `tunnel-config.json`
+
+```json
+{
+  "ingress": [
+    {
+      "hostname": "api.example.com",
+      "service": "http://app:8080",
+      "auth": { "apiKey": true }
+    },
+    {
+      "hostname": "public.example.com",
+      "service": "http://app:8080"
+    },
+    { "service": "http_status:404" }
+  ]
+}
+```
+
+The container creates one WAF custom rule scoped to the opted-in hostnames. Requests to those hostnames without `Authorization: Bearer <key>` are blocked at the Cloudflare edge, before reaching your origin. Hostnames without `auth.apiKey` are left unprotected. OPTIONS requests pass through for CORS preflight.
+
+Compatible with any OpenAI-style client (Continue, Brave, LiteLLM, etc.) — just set the URL and API key.
 
 To use API key auth, your API token needs one additional permission:
 - Zone: Firewall Services (Write)
+
+> **Breaking change (pre-1.0):** earlier versions applied `API_KEY` globally to every hostname. You must now opt each hostname in with `auth.apiKey: true`. If `API_KEY` is set but no rule opts in, the container logs a warning and creates no WAF rule.
 
 ## Environment variables
 

@@ -47,6 +47,12 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 - [x] Idempotent: finds existing ruleset/rule by name, updates if present
 - [x] All via API — no dashboard interaction, no manual steps
 
+### Phase 5: Per-route auth — In progress ([CT-1](https://procyoncreative.atlassian.net/browse/CT-1))
+- [x] `auth.apiKey: true` on ingress rule opts that hostname into WAF Bearer protection; hostnames without it are public ([CT-2](https://procyoncreative.atlassian.net/browse/CT-2))
+- [x] Breaking change: `API_KEY` no longer applies globally; each hostname must opt in
+- [x] Stale WAF rule is removed when all hostnames opt out
+- [ ] `auth.access` provisions a Cloudflare Access app + policy ([CT-3](https://procyoncreative.atlassian.net/browse/CT-3))
+
 ### Design decisions made
 - **Single container**: Base image is `cloudflare/cloudflared`, entrypoint does API setup then exec's into `cloudflared tunnel run`. One service for users to add, not two.
 - **Ingress config**: JSON config file with JSON Schema (not env vars) — maps 1:1 to Cloudflare API format, supports originRequest and path fields, gives IDE autocomplete via $schema

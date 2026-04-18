@@ -9,6 +9,7 @@
       "hostname": "api.example.com",
       "path": "/v1/*",
       "service": "http://api:3000",
+      "auth": { "apiKey": true },
       "originRequest": {
         "connectTimeout": "60s"
       }

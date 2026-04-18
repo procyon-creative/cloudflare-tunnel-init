@@ -90,9 +90,17 @@ validate_config() {
       die "Ingress rule $i has empty 'service' field"
     fi
 
-    unknown_rule_keys=$(echo "$rule" | jq -r 'keys[] | select(. != "hostname" and . != "path" and . != "service" and . != "originRequest")')
+    unknown_rule_keys=$(echo "$rule" | jq -r 'keys[] | select(. != "hostname" and . != "path" and . != "service" and . != "originRequest" and . != "auth")')
     if [ -n "$unknown_rule_keys" ]; then
       die "Ingress rule $i has unknown keys: $unknown_rule_keys"
+    fi
+
+    has_auth=$(echo "$rule" | jq 'has("auth")')
+    if [ "$has_auth" = "true" ]; then
+      unknown_auth_keys=$(echo "$rule" | jq -r '.auth | keys[] | select(. != "apiKey")')
+      if [ -n "$unknown_auth_keys" ]; then
+        die "Ingress rule $i has unknown auth keys: $unknown_auth_keys"
+      fi
     fi
 
     i=$((i + 1))
@@ -185,16 +193,26 @@ for hostname in $hostnames; do
 done
 
 # ---------------------------------------------------------------------------
-# 4. API key auth via WAF custom rule (optional)
+# 4. API key auth via WAF custom rule (optional, per-hostname)
 # ---------------------------------------------------------------------------
-if [ -n "${API_KEY}" ]; then
-  echo "Setting up API key auth (WAF custom rule)..."
+apikey_hostnames=$(echo "$ingress_rules" | jq -r '.[] | select(.auth.apiKey == true) | .hostname')
+
+if [ -n "$apikey_hostnames" ] && [ -z "${API_KEY}" ]; then
+  die "Ingress rules request auth.apiKey but API_KEY env var is not set"
+fi
+
+if [ -z "$apikey_hostnames" ] && [ -n "${API_KEY}" ]; then
+  echo "WARN: API_KEY is set but no ingress rule has auth.apiKey=true — key has no effect." >&2
+fi
+
+if [ -n "$apikey_hostnames" ]; then
+  echo "Setting up API key auth (WAF custom rule) for: $(echo $apikey_hostnames | tr '\n' ' ')"
 
   WAF_RULE_NAME="${TUNNEL_NAME}-api-key-auth"
 
-  # Build expression: block requests to any ingress hostname without the correct Bearer token
+  # Build expression: block requests to opted-in hostnames without the correct Bearer token
   host_conditions=""
-  for hostname in $hostnames; do
+  for hostname in $apikey_hostnames; do
     if [ -n "$host_conditions" ]; then
       host_conditions="${host_conditions} or "
     fi
@@ -232,7 +250,22 @@ if [ -n "${API_KEY}" ]; then
       -d "$ruleset_json" > /dev/null
   fi
 
-  echo "  API key auth configured for: $hostnames"
+  echo "  API key auth configured for: $(echo $apikey_hostnames | tr '\n' ' ')"
+fi
+
+# Stale WAF rule cleanup: if a rule for this tunnel exists but no hostnames opt in,
+# remove it so de-scoping an auth rule actually removes it.
+if [ -z "$apikey_hostnames" ]; then
+  stale_rulesets=$(cf_api GET "/zones/${CLOUDFLARE_ZONE_ID}/rulesets")
+  stale_ruleset_id=$(echo "$stale_rulesets" | jq -r '.result[] | select(.phase == "http_request_firewall_custom") | .id' | head -1)
+  if [ -n "$stale_ruleset_id" ]; then
+    stale_rule_id=$(cf_api GET "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${stale_ruleset_id}" \
+      | jq -r --arg desc "${TUNNEL_NAME}-api-key-auth" '.result.rules[]? | select(.description == $desc) | .id' | head -1)
+    if [ -n "$stale_rule_id" ]; then
+      echo "Removing stale WAF rule (no hostnames opted in)..."
+      cf_api DELETE "/zones/${CLOUDFLARE_ZONE_ID}/rulesets/${stale_ruleset_id}/rules/${stale_rule_id}" > /dev/null
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------

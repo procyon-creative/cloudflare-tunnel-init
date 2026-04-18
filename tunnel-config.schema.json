@@ -33,12 +33,26 @@
           },
           "originRequest": {
             "$ref": "#/$defs/originRequest"
+          },
+          "auth": {
+            "$ref": "#/$defs/auth"
           }
         }
       }
     }
   },
   "$defs": {
+    "auth": {
+      "type": "object",
+      "description": "Per-rule authentication. Different hostnames can use different auth methods; a rule with no auth object is publicly accessible.",
+      "additionalProperties": false,
+      "properties": {
+        "apiKey": {
+          "type": "boolean",
+          "description": "When true, require Authorization: Bearer $API_KEY on this hostname via a Cloudflare WAF custom rule. The API_KEY env var must be set."
+        }
+      }
+    },
     "originRequest": {
       "type": "object",
       "description": "Per-rule origin request settings. Matches cloudflared OriginRequestConfig struct.",

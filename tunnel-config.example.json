@@ -3,7 +3,13 @@
   "ingress": [
     {
       "hostname": "app.example.com",
-      "service": "http://app:8080"
+      "service": "http://app:8080",
+      "auth": {
+        "access": {
+          "emailDomain": "example.com",
+          "sessionDuration": "24h"
+        }
+      }
     },
     {
       "hostname": "api.example.com",

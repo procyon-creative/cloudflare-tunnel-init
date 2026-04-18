@@ -47,11 +47,13 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 - [x] Idempotent: finds existing ruleset/rule by name, updates if present
 - [x] All via API — no dashboard interaction, no manual steps
 
-### Phase 5: Per-route auth — In progress ([CT-1](https://procyoncreative.atlassian.net/browse/CT-1))
+### Phase 5: Per-route auth — Done ([CT-1](https://procyoncreative.atlassian.net/browse/CT-1))
 - [x] `auth.apiKey: true` on ingress rule opts that hostname into WAF Bearer protection; hostnames without it are public ([CT-2](https://procyoncreative.atlassian.net/browse/CT-2))
 - [x] Breaking change: `API_KEY` no longer applies globally; each hostname must opt in
 - [x] Stale WAF rule is removed when all hostnames opt out
-- [ ] `auth.access` provisions a Cloudflare Access app + policy ([CT-3](https://procyoncreative.atlassian.net/browse/CT-3))
+- [x] `auth.access` provisions a self-hosted Cloudflare Access app + Allow policy, gated by emailDomain or explicit emails list, with configurable sessionDuration ([CT-3](https://procyoncreative.atlassian.net/browse/CT-3))
+- [x] `auth.apiKey` and `auth.access` mutually exclusive on a single rule — use separate hostnames for mixed auth
+- [ ] Auto-delete Access apps when `auth.access` is removed from a rule (follow-up; currently documented as manual cleanup because Access apps may have dashboard-added policies we don't own)
 
 ### Design decisions made
 - **Single container**: Base image is `cloudflare/cloudflared`, entrypoint does API setup then exec's into `cloudflared tunnel run`. One service for users to add, not two.
@@ -77,7 +79,17 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 - Create ruleset: `POST /zones/{zone_id}/rulesets` with phase `http_request_firewall_custom`
 - Add rule to ruleset: `POST /zones/{zone_id}/rulesets/{ruleset_id}/rules`
 - Update rule: `PATCH /zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}`
+- Delete rule: `DELETE /zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}`
 - Expression format: `(http.host eq "...") and not (http.request.headers["authorization"][0] eq "Bearer <key>")`
+
+### Access (Cloudflare Zero Trust)
+- List apps for a domain: `GET /accounts/{account_id}/access/apps?domain={hostname}`
+- Create app: `POST /accounts/{account_id}/access/apps` with `{name, domain, type: "self_hosted", session_duration}`
+- Update app: `PUT /accounts/{account_id}/access/apps/{app_id}`
+- List policies: `GET /accounts/{account_id}/access/apps/{app_id}/policies`
+- Create policy: `POST /accounts/{account_id}/access/apps/{app_id}/policies` with `{name, decision, include: [...], precedence}`
+- Update policy: `PUT /accounts/{account_id}/access/apps/{app_id}/policies/{policy_id}`
+- Include shapes: `{email_domain: {domain: "..."}}` or `{email: {email: "..."}}`
 
 ### Runtime
 - Run tunnel: `exec cloudflared tunnel --no-autoupdate run --token {TUNNEL_TOKEN}` (entrypoint exec's into this)
@@ -86,4 +98,6 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 
 - Account: Cloudflare Tunnel (Edit)
 - Zone: DNS (Edit)
-- Zone: Firewall Services (Write) — only if using API_KEY
+- Zone: Firewall Services (Write) — only if using `auth.apiKey`
+- Account: Access: Apps and Policies (Edit) — only if using `auth.access`
+- Account: Access: Organizations, Identity Providers, and Groups (Read) — only if using `auth.access`

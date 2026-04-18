@@ -104,7 +104,7 @@ Each rule maps a hostname to an origin service:
 | `service`       | Yes      | Origin URL (e.g. `http://app:8080`) or built-in like `http_status:404`. |
 | `path`          | No       | Path filter with glob syntax (e.g. `/api/*`). |
 | `originRequest` | No       | Per-rule origin settings (timeouts, TLS, etc). |
-| `auth`          | No       | Per-rule authentication. See [API key auth](#api-key-auth-optional). |
+| `auth`          | No       | Per-rule authentication. See [API key auth](#api-key-auth-optional) and [Access auth](#cloudflare-access-auth-optional). |
 
 The last rule **must** be a catch-all with no `hostname` — this handles unmatched requests.
 
@@ -172,6 +172,58 @@ To use API key auth, your API token needs one additional permission:
 - Zone: Firewall Services (Write)
 
 > **Breaking change (pre-1.0):** earlier versions applied `API_KEY` globally to every hostname. You must now opt each hostname in with `auth.apiKey: true`. If `API_KEY` is set but no rule opts in, the container logs a warning and creates no WAF rule.
+
+## Cloudflare Access auth (optional)
+
+Protect a hostname with a Cloudflare Access application — SSO / one-time-PIN in the browser, no `Authorization` header required. Ideal for browser-facing UIs where pasting bearer tokens isn't practical.
+
+```json
+{
+  "ingress": [
+    {
+      "hostname": "app.example.com",
+      "service": "http://app:8080",
+      "auth": {
+        "access": {
+          "emailDomain": "example.com",
+          "sessionDuration": "24h"
+        }
+      }
+    },
+    { "service": "http_status:404" }
+  ]
+}
+```
+
+On startup the container provisions a self-hosted Access app for the hostname and attaches an Allow policy that gates on either:
+
+- `emailDomain`: allow any email in this domain (`example.com`)
+- `emails`: allow only these specific addresses (`["a@example.com", "b@example.com"]`)
+
+Pick one — setting both fails validation. `sessionDuration` defaults to `24h` (Cloudflare's default). `name` defaults to `${TUNNEL_NAME}-${hostname}` — override if you want a custom display name in the Access dashboard.
+
+**Combining Access and API key on one backend.** `auth.apiKey` and `auth.access` are mutually exclusive on the same rule — rejected at validation. For a service that needs both (e.g. a web UI and a machine API sharing a backend), use two hostnames pointing at the same `service`:
+
+```json
+{
+  "ingress": [
+    { "hostname": "app.example.com",     "service": "http://app:8080", "auth": { "access": { "emailDomain": "example.com" } } },
+    { "hostname": "app-api.example.com", "service": "http://app:8080", "auth": { "apiKey": true } },
+    { "service": "http_status:404" }
+  ]
+}
+```
+
+### Token permissions for Access
+
+Using `auth.access` requires two additional token scopes on top of the base set:
+
+- Account: Access: Apps and Policies — Edit
+- Account: Access: Organizations, Identity Providers, and Groups — Read
+
+### Deletion
+
+Removing `auth.access` from a rule does **not** auto-delete the Access app (unlike WAF rules, which are fully owned by this container, Access apps may have manually-added policies). Clean up via the Cloudflare dashboard or API if you no longer need them.
 
 ## Environment variables
 

@@ -44,12 +44,37 @@
   "$defs": {
     "auth": {
       "type": "object",
-      "description": "Per-rule authentication. Different hostnames can use different auth methods; a rule with no auth object is publicly accessible.",
+      "description": "Per-rule authentication. Different hostnames can use different auth methods; a rule with no auth object is publicly accessible. apiKey and access are mutually exclusive on the same rule.",
       "additionalProperties": false,
       "properties": {
         "apiKey": {
           "type": "boolean",
           "description": "When true, require Authorization: Bearer $API_KEY on this hostname via a Cloudflare WAF custom rule. The API_KEY env var must be set."
+        },
+        "access": {
+          "type": "object",
+          "description": "Protect this hostname with a Cloudflare Access application. Provisions a self-hosted Access app and an Allow policy gated by email domain or explicit email list.",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Display name for the Access app. Defaults to ${TUNNEL_NAME}-${hostname}."
+            },
+            "emailDomain": {
+              "type": "string",
+              "description": "Allow any email address in this domain (e.g. example.com). Mutually exclusive with emails."
+            },
+            "emails": {
+              "type": "array",
+              "items": { "type": "string", "format": "email" },
+              "minItems": 1,
+              "description": "Allow only these specific email addresses. Mutually exclusive with emailDomain."
+            },
+            "sessionDuration": {
+              "type": "string",
+              "description": "How long an Access session lasts (e.g. 24h, 168h, 720h). Defaults to 24h."
+            }
+          }
         }
       }
     },

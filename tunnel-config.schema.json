@@ -44,16 +44,16 @@
   "$defs": {
     "auth": {
       "type": "object",
-      "description": "Per-rule authentication. Different hostnames can use different auth methods; a rule with no auth object is publicly accessible. apiKey and access are mutually exclusive on the same rule.",
+      "description": "Per-rule authentication. Different hostnames — or different paths on the same hostname — can use different auth methods; a rule with no auth object is publicly accessible. apiKey and access are mutually exclusive on the same rule. If the rule has a top-level `path` field, the auth provisioning is scoped to that path: WAF rules add a path-prefix or exact-match condition; Access apps register at `hostname/path-prefix`.",
       "additionalProperties": false,
       "properties": {
         "apiKey": {
           "type": "boolean",
-          "description": "When true, require Authorization: Bearer $API_KEY on this hostname via a Cloudflare WAF custom rule. The API_KEY env var must be set."
+          "description": "When true, require Authorization: Bearer $API_KEY via a Cloudflare WAF custom rule. The rule is scoped to this ingress entry's hostname (and `path` if set). The API_KEY env var must be set."
         },
         "access": {
           "type": "object",
-          "description": "Protect this hostname with a Cloudflare Access application. Provisions a self-hosted Access app and an Allow policy gated by email domain or explicit email list.",
+          "description": "Protect this rule with a Cloudflare Access application. Provisions a self-hosted Access app (scoped to the rule's hostname and `path` if set) and an Allow policy gated by email domain or explicit email list.",
           "additionalProperties": false,
           "properties": {
             "name": {

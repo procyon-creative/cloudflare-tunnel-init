@@ -215,33 +215,73 @@ for hostname in $hostnames; do
 done
 
 # ---------------------------------------------------------------------------
-# 4. API key auth via WAF custom rule (optional, per-hostname)
+# 4. API key auth via WAF custom rule (optional, per-rule with path scoping)
 # ---------------------------------------------------------------------------
-apikey_hostnames=$(echo "$ingress_rules" | jq -r '.[] | select(.auth.apiKey == true) | .hostname')
+# Each ingress rule with `auth.apiKey: true` contributes a (host[, path]) clause
+# to a single WAF rule. Rules without a `path` field gate the whole hostname.
+# Rules with a `path` field gate only that path:
+#   path ending in "*" → starts_with(...) match
+#   exact path         → eq match
+#
+# A rule like `{ hostname: "api.example.com", path: "/v1/*", auth: { apiKey: true } }`
+# produces the clause: (http.host eq "api.example.com" and starts_with(http.request.uri.path, "/v1/")).
+# Multiple apiKey rules OR together so one WAF rule covers them all.
+apikey_count=$(echo "$ingress_rules" | jq '[.[] | select(.auth.apiKey == true)] | length')
 
-if [ -n "$apikey_hostnames" ] && [ -z "${API_KEY}" ]; then
+if [ "$apikey_count" -gt 0 ] && [ -z "${API_KEY}" ]; then
   die "Ingress rules request auth.apiKey but API_KEY env var is not set"
 fi
 
-if [ -z "$apikey_hostnames" ] && [ -n "${API_KEY}" ]; then
+if [ "$apikey_count" -eq 0 ] && [ -n "${API_KEY}" ]; then
   echo "WARN: API_KEY is set but no ingress rule has auth.apiKey=true — key has no effect." >&2
 fi
 
-if [ -n "$apikey_hostnames" ]; then
-  echo "Setting up API key auth (WAF custom rule) for: $(echo $apikey_hostnames | tr '\n' ' ')"
-
+apikey_hostnames=""  # for stale cleanup compatibility below
+if [ "$apikey_count" -gt 0 ]; then
   WAF_RULE_NAME="${TUNNEL_NAME}-api-key-auth"
 
-  # Build expression: block requests to opted-in hostnames without the correct Bearer token
-  host_conditions=""
-  for hostname in $apikey_hostnames; do
-    if [ -n "$host_conditions" ]; then
-      host_conditions="${host_conditions} or "
+  # Build per-rule clauses, joined with OR.
+  match_conditions=""
+  i=0
+  rule_count=$(echo "$ingress_rules" | jq 'length')
+  while [ "$i" -lt "$rule_count" ]; do
+    rule=$(echo "$ingress_rules" | jq ".[$i]")
+    is_apikey=$(echo "$rule" | jq '.auth.apiKey == true')
+    if [ "$is_apikey" = "true" ]; then
+      host=$(echo "$rule" | jq -r '.hostname')
+      path=$(echo "$rule" | jq -r '.path // ""')
+
+      clause="http.host eq \"${host}\""
+      if [ -n "$path" ]; then
+        # cloudflared glob: "/v1/*" → prefix match. Bare path → exact match.
+        case "$path" in
+          */\*)
+            prefix=${path%\*}
+            clause="${clause} and starts_with(http.request.uri.path, \"${prefix}\")"
+            ;;
+          *)
+            clause="${clause} and http.request.uri.path eq \"${path}\""
+            ;;
+        esac
+        echo "  WAF rule covers: ${host}${path}"
+      else
+        echo "  WAF rule covers: ${host} (all paths)"
+      fi
+
+      if [ -n "$match_conditions" ]; then
+        match_conditions="${match_conditions} or "
+      fi
+      match_conditions="${match_conditions}(${clause})"
+
+      apikey_hostnames="${apikey_hostnames}${host}
+"
     fi
-    host_conditions="${host_conditions}http.host eq \"${hostname}\""
+    i=$((i + 1))
   done
 
-  expression="(${host_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\") and not (http.request.method eq \"OPTIONS\")"
+  echo "Setting up API key auth (WAF custom rule)"
+
+  expression="(${match_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\") and not (http.request.method eq \"OPTIONS\")"
 
   # Build rule JSON with jq to avoid escaping issues
   rule_json=$(jq -n --arg expr "$expression" --arg desc "$WAF_RULE_NAME" \
@@ -291,8 +331,12 @@ if [ -z "$apikey_hostnames" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Cloudflare Access apps (optional, per-hostname)
+# 5. Cloudflare Access apps (optional, per-rule with path scoping)
 # ---------------------------------------------------------------------------
+# Each ingress rule with `auth.access` gets its own Access app. If the rule has
+# a `path` field, the app's `domain` becomes `hostname/path-prefix` (Cloudflare
+# Access matches by longest-prefix), so different paths on the same hostname can
+# have different auth gates. A rule with no path covers the whole hostname.
 access_rule_count=$(echo "$ingress_rules" | jq '[.[] | select(.auth.access)] | length')
 
 if [ "$access_rule_count" -gt 0 ]; then
@@ -308,7 +352,23 @@ if [ "$access_rule_count" -gt 0 ]; then
     fi
 
     hostname=$(echo "$rule" | jq -r '.hostname')
-    access_name=$(echo "$rule" | jq -r --arg default "${TUNNEL_NAME}-${hostname}" '.auth.access.name // $default')
+    path=$(echo "$rule" | jq -r '.path // ""')
+
+    # Build the Access app domain. Cloudflare Access matches by prefix, so for
+    # path "/admin/*" or "/admin" we register `hostname/admin`. Bare hostname
+    # (no path) registers as `hostname` and covers everything not pre-empted by
+    # a more specific app.
+    if [ -n "$path" ]; then
+      path_prefix=${path%/\*}   # strip trailing /*
+      path_prefix=${path_prefix#/}  # strip leading /
+      app_domain="${hostname}/${path_prefix}"
+      default_name="${TUNNEL_NAME}-${hostname}-${path_prefix//\//-}"
+    else
+      app_domain="$hostname"
+      default_name="${TUNNEL_NAME}-${hostname}"
+    fi
+
+    access_name=$(echo "$rule" | jq -r --arg default "$default_name" '.auth.access.name // $default')
     session_duration=$(echo "$rule" | jq -r '.auth.access.sessionDuration // "24h"')
 
     # Build the policy include[] from emailDomain or emails
@@ -319,22 +379,22 @@ if [ "$access_rule_count" -gt 0 ]; then
       include_json=$(echo "$rule" | jq '[.auth.access.emails[] | {email: {email: .}}]')
     fi
 
-    # Find existing app for this domain
-    existing_apps=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?domain=${hostname}")
-    app_id=$(echo "$existing_apps" | jq -r --arg domain "$hostname" '.result[]? | select(.domain == $domain) | .id' | head -1)
+    # Find existing app by exact domain match (incl. path prefix).
+    existing_apps=$(cf_api GET "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps?domain=${app_domain}")
+    app_id=$(echo "$existing_apps" | jq -r --arg domain "$app_domain" '.result[]? | select(.domain == $domain) | .id' | head -1)
 
     app_payload=$(jq -n \
       --arg name "$access_name" \
-      --arg domain "$hostname" \
+      --arg domain "$app_domain" \
       --arg session "$session_duration" \
       '{name: $name, domain: $domain, type: "self_hosted", session_duration: $session}')
 
     if [ -n "$app_id" ]; then
-      echo "  Updating Access app for ${hostname}..."
+      echo "  Updating Access app for ${app_domain}..."
       cf_api PUT "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps/${app_id}" \
         -d "$app_payload" > /dev/null
     else
-      echo "  Creating Access app for ${hostname}..."
+      echo "  Creating Access app for ${app_domain}..."
       create_resp=$(cf_api POST "/accounts/${CLOUDFLARE_ACCOUNT_ID}/access/apps" \
         -d "$app_payload")
       app_id=$(echo "$create_resp" | jq -r '.result.id')

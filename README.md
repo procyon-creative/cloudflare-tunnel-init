@@ -202,7 +202,22 @@ On startup the container provisions a self-hosted Access app for the hostname an
 
 Pick one — setting both fails validation. `sessionDuration` defaults to `24h` (Cloudflare's default). `name` defaults to `${TUNNEL_NAME}-${hostname}` — override if you want a custom display name in the Access dashboard.
 
-**Combining Access and API key on one backend.** `auth.apiKey` and `auth.access` are mutually exclusive on the same rule — rejected at validation. For a service that needs both (e.g. a web UI and a machine API sharing a backend), use two hostnames pointing at the same `service`:
+**Combining Access and API key on one backend.** `auth.apiKey` and `auth.access` are mutually exclusive *on the same rule* — but you can stack two rules for the same hostname with different `path` filters to mix auth modes:
+
+```json
+{
+  "ingress": [
+    { "hostname": "app.example.com", "path": "/v1/*",   "service": "http://app:8080", "auth": { "apiKey": true } },
+    { "hostname": "app.example.com", "path": "/healthz","service": "http://app:8080", "auth": { "apiKey": true } },
+    { "hostname": "app.example.com",                    "service": "http://app:8080", "auth": { "access": { "emailDomain": "example.com" } } },
+    { "service": "http_status:404" }
+  ]
+}
+```
+
+This gates `/v1/*` and `/healthz` with the WAF Bearer rule (programmatic clients), and everything else on the hostname (browser-facing UI, WebSocket endpoints, dashboards) with Cloudflare Access SSO. Rule order matters: cloudflared dispatches by longest-prefix path match, and Cloudflare Access uses the same precedence for its scoped apps.
+
+You can still use two separate hostnames if you prefer the explicit split:
 
 ```json
 {

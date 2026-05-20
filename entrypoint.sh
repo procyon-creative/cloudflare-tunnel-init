@@ -281,7 +281,15 @@ if [ "$apikey_count" -gt 0 ]; then
 
   echo "Setting up API key auth (WAF custom rule)"
 
-  expression="(${match_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\") and not (http.request.method eq \"OPTIONS\")"
+  # Build the negation chain. Requests are blocked unless they satisfy any of:
+  #   - Authorization: Bearer ${API_KEY}      (REST clients)
+  #   - method=OPTIONS                         (CORS preflight)
+  #   - Upgrade: websocket                     (WS clients — bearer doesn't apply
+  #                                             at the handshake, so origin auth
+  #                                             handles the token in protocol
+  #                                             params; same shape every
+  #                                             WebSocket client uses)
+  expression="(${match_conditions}) and not (http.request.headers[\"authorization\"][0] eq \"Bearer ${API_KEY}\") and not (http.request.method eq \"OPTIONS\") and not (lower(http.request.headers[\"upgrade\"][0]) eq \"websocket\")"
 
   # Build rule JSON with jq to avoid escaping issues
   rule_json=$(jq -n --arg expr "$expression" --arg desc "$WAF_RULE_NAME" \

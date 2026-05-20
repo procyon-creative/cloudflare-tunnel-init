@@ -166,6 +166,8 @@ Protect specific hostnames with a Bearer token. Two things are required:
 
 The container creates one WAF custom rule scoped to the opted-in hostnames. Requests to those hostnames without `Authorization: Bearer <key>` are blocked at the Cloudflare edge, before reaching your origin. Hostnames without `auth.apiKey` are left unprotected. OPTIONS requests pass through for CORS preflight.
 
+**WebSocket upgrades pass through unconditionally.** WebSocket clients can't include an `Authorization` header in the upgrade handshake (the WebSocket spec routes header customisation through the `Sec-WebSocket-Protocol` subprotocol, not the request itself), so blocking WS upgrades at the WAF would make API-keyed hostnames unusable for any WS-based protocol. The WAF rule explicitly allows requests where `Upgrade: websocket` is present; the origin is expected to enforce its own per-protocol token check on the established connection. If you don't run anything WebSocket-shaped behind the hostname, this is harmless.
+
 Compatible with any OpenAI-style client (Continue, Brave, LiteLLM, etc.) — just set the URL and API key.
 
 To use API key auth, your API token needs one additional permission:

@@ -1,5 +1,8 @@
 # cloudflare-tunnel-init
 
+> [!WARNING]
+> **Deprecated**: This repository has been deprecated in favor of [cloudflare-tunnel-terraform](https://github.com/procyon-creative/cloudflare-tunnel-terraform). This repository is archived and is now read-only. See the migration guide in [cloudflare-tunnel-terraform](https://github.com/procyon-creative/cloudflare-tunnel-terraform) to migrate your existing deployment.
+
 A drop-in Docker service that automates Cloudflare Tunnel setup and runs the tunnel — no dashboard clicks, no `cloudflared login`, no browser required. Add one service to your `docker-compose.yml` and go.
 
 ## Quick start

@@ -21,33 +21,33 @@ A standalone Docker container that automates Cloudflare Tunnel creation via the 
 
 ## Status
 
-### Phase 1: Core init container — Done
+### Phase 1: Core init container — Frozen (see Terraform replacement)
 - [x] entrypoint.sh with full API workflow (create/find tunnel, configure ingress, create DNS, write token)
 - [x] Dockerfile (alpine + curl + jq + openssl)
 - [x] docker-compose.yml with single service
 - [x] .env.example with all required variables documented
 - [x] Ingress config via mounted JSON file with JSON Schema validation
 
-### Phase 2: Idempotency and error handling — Mostly done
+### Phase 2: Idempotency and error handling — Frozen (see Terraform replacement)
 - [x] Tunnel creation idempotent (finds by name before creating)
 - [x] DNS record creation idempotent (checks before creating, updates if changed)
 - [x] Ingress config idempotent (PUT replaces)
 - [x] API errors handled with clear messages
 - [ ] Support tunnel cleanup/deletion (optional destroy mode)
 
-### Phase 3: Documentation and usability — Done
+### Phase 3: Documentation and usability — Frozen (see Terraform replacement)
 - [x] README with quick start
 - [x] API token permissions documented
 - [x] .gitignore
 
-### Phase 4: API key auth via WAF — Done
+### Phase 4: API key auth via WAF — Frozen (see Terraform replacement)
 - [x] If `API_KEY` is set, create a WAF custom rule blocking requests without `Authorization: Bearer <key>`
 - [x] Standard OpenAI API key format — works with any client (Continue, Brave, LiteLLM, etc.)
 - [x] Auth enforced at Cloudflare edge — no unauthenticated traffic reaches origin
 - [x] Idempotent: finds existing ruleset/rule by name, updates if present
 - [x] All via API — no dashboard interaction, no manual steps
 
-### Phase 5: Per-route auth — Done ([CT-1](https://procyoncreative.atlassian.net/browse/CT-1))
+### Phase 5: Per-route auth — Frozen (see Terraform replacement)
 - [x] `auth.apiKey: true` on ingress rule opts that hostname into WAF Bearer protection; hostnames without it are public ([CT-2](https://procyoncreative.atlassian.net/browse/CT-2))
 - [x] Breaking change: `API_KEY` no longer applies globally; each hostname must opt in
 - [x] Stale WAF rule is removed when all hostnames opt out

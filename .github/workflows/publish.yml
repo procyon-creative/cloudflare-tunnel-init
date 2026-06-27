@@ -1,9 +1,8 @@
 name: Publish Container Image
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
+  workflow_dispatch:
+    description: "Manual trigger only (Repository is archived/deprecated)"
 
 env:
   REGISTRY: ghcr.io
